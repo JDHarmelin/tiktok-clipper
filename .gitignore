@@ -1,0 +1,16 @@
+.env
+cookies.txt
+downloads/
+clips/
+subtitles/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+gameplay/
+.DS_Store
