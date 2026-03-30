@@ -398,6 +398,11 @@ def run_pipeline(
                     screenshot_msg = f" | screenshot: {screenshot}" if screenshot else ""
                     notify("error", f"[{acct}] Upload failed for {clip['filename']}: {error}{screenshot_msg}")
 
+                    # Stop uploading to this account if rate limited
+                    if result.get("rate_limited"):
+                        notify("error", f"[{acct}] Rate limited — skipping remaining clips for this account")
+                        break
+
                 # Delay between uploads to avoid TikTok rate limiting
                 _time.sleep(30)
 
