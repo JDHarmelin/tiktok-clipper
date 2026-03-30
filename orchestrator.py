@@ -254,6 +254,10 @@ def run_pipeline(
     _pipeline_state["source_video"] = None
     _pipeline_state["has_captions"] = True
 
+    # Token usage tracking
+    total_input_tokens = 0
+    total_output_tokens = 0
+
     def notify(stage, message):
         if progress_callback:
             progress_callback(stage, message)
@@ -296,6 +300,11 @@ def run_pipeline(
             notify("error", f"Unexpected error in pipeline loop: {e}")
             logger.error(f"Unexpected pipeline error: {e}", exc_info=True)
             break
+
+        # Accumulate token usage from this response
+        if hasattr(response, "usage") and response.usage:
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
 
         if response.stop_reason == "end_turn":
             final_text = ""
@@ -347,37 +356,50 @@ def run_pipeline(
     clips = _pipeline_state["clips"]
     clip_count = len(clips)
     posted_count = 0
+    verified_count = 0
     errors = []
 
     if clips:
         import time as _time
-        notify("upload", f"Uploading {clip_count} clips to TikTok...")
+        from tiktok_poster import list_accounts as _list_accounts
 
-        for i, clip in enumerate(clips):
-            notify("upload", f"Uploading clip {i+1}/{clip_count}: {clip['filename']}")
+        # Upload to all registered accounts
+        all_accounts = _list_accounts()
+        notify("upload", f"Uploading {clip_count} clips to {len(all_accounts)} account(s): {', '.join(all_accounts)}...")
 
-            # Double-clean caption right before upload (safety net)
-            video_id = clip.get("filename", "").split("_clip_")[0] if "_clip_" in clip.get("filename", "") else ""
-            clean_cap = _clean_caption(clip["caption"], video_id)
-            logger.info(f"Uploading clip {i+1}/{clip_count}: {clip['filepath']} | caption: {clean_cap}")
+        for acct in all_accounts:
+            notify("upload", f"Uploading to account: {acct}")
 
-            result = upload_to_tiktok(
-                video_path=clip["filepath"],
-                caption=clean_cap,
-                account_name=account_name,
-            )
+            for i, clip in enumerate(clips):
+                notify("upload", f"[{acct}] Uploading clip {i+1}/{clip_count}: {clip['filename']}")
 
-            if result.get("success"):
-                posted_count += 1
-                notify("upload", f"Uploaded {clip['filename']} to TikTok!")
-            else:
-                error = result.get("error", "Unknown error")
-                errors.append(error)
-                notify("error", f"Upload failed for {clip['filename']}: {error}")
+                # Double-clean caption right before upload (safety net)
+                video_id = clip.get("filename", "").split("_clip_")[0] if "_clip_" in clip.get("filename", "") else ""
+                clean_cap = _clean_caption(clip["caption"], video_id)
+                logger.info(f"[{acct}] Uploading clip {i+1}/{clip_count}: {clip['filepath']} | caption: {clean_cap}")
 
-            # Delay between uploads to avoid TikTok rate limiting
-            if i < len(clips) - 1:
-                _time.sleep(15)
+                result = upload_to_tiktok(
+                    video_path=clip["filepath"],
+                    caption=clean_cap,
+                    account_name=acct,
+                )
+
+                if result.get("success"):
+                    posted_count += 1
+                    if result.get("verified"):
+                        verified_count += 1
+                        notify("upload", f"[{acct}] VERIFIED {clip['filename']}")
+                    else:
+                        notify("upload", f"[{acct}] Uploaded {clip['filename']} (unverified)")
+                else:
+                    error = result.get("error", "Unknown error")
+                    errors.append(f"[{acct}] {error}")
+                    screenshot = result.get("screenshot", "")
+                    screenshot_msg = f" | screenshot: {screenshot}" if screenshot else ""
+                    notify("error", f"[{acct}] Upload failed for {clip['filename']}: {error}{screenshot_msg}")
+
+                # Delay between uploads to avoid TikTok rate limiting
+                _time.sleep(30)
 
     # --- Phase 3: Clean up source video to save disk space ---
     source = _pipeline_state.get("source_video")
@@ -393,11 +415,20 @@ def run_pipeline(
             except Exception as e:
                 logger.error(f"Failed to delete source video: {e}")
 
+    # Calculate API cost (Claude Sonnet 4: $3/MTok input, $15/MTok output)
+    input_cost = (total_input_tokens / 1_000_000) * 3.0
+    output_cost = (total_output_tokens / 1_000_000) * 15.0
+    total_cost = input_cost + output_cost
+
     return {
         "clip_count": clip_count,
         "posted_count": posted_count,
+        "verified_count": verified_count,
         "errors": errors,
-        "summary": f"{clip_count} clips generated, {posted_count} uploaded to TikTok",
+        "summary": f"{clip_count} clips generated, {verified_count}/{posted_count} verified on TikTok",
+        "input_tokens": total_input_tokens,
+        "output_tokens": total_output_tokens,
+        "api_cost": round(total_cost, 4),
     }
 
 

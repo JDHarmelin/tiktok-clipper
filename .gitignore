@@ -13,4 +13,6 @@ venv/
 dist/
 build/
 gameplay/
+screenshots/
+cookies*.txt
 .DS_Store

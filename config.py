@@ -21,6 +21,19 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 # TikTok
 TIKTOK_COOKIES_PATH = os.getenv("TIKTOK_COOKIES_PATH", "./cookies.txt")
 
+# Multi-account support: "name:cookiefile,name2:cookiefile2"
+# Falls back to default:TIKTOK_COOKIES_PATH if not set
+_raw_accounts = os.getenv("TIKTOK_ACCOUNTS", "")
+TIKTOK_ACCOUNTS: dict[str, str] = {}
+if _raw_accounts.strip():
+    for entry in _raw_accounts.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            name, path = entry.split(":", 1)
+            TIKTOK_ACCOUNTS[name.strip()] = path.strip()
+if not TIKTOK_ACCOUNTS:
+    TIKTOK_ACCOUNTS["default"] = TIKTOK_COOKIES_PATH
+
 # Pipeline
 MAX_CLIPS = int(os.getenv("MAX_CLIPS_PER_VIDEO", "10"))
 MIN_CLIP_DURATION = int(os.getenv("MIN_CLIP_DURATION", "20"))

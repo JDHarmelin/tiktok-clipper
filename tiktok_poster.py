@@ -1,21 +1,22 @@
-"""Handles TikTok video uploads. Supports multiple accounts via account_name parameter."""
+"""Handles TikTok video uploads with post-upload verification."""
 import time
-import subprocess
-import sys
-import json
 import logging
 from pathlib import Path
-from config import TIKTOK_COOKIES_PATH, BASE_DIR
+from datetime import datetime
+
+try:
+    from config import TIKTOK_ACCOUNTS, BASE_DIR
+except ImportError:
+    TIKTOK_ACCOUNTS = {"default": "./cookies.txt"}
+    BASE_DIR = Path(__file__).parent
 
 logger = logging.getLogger(__name__)
 
-# Account registry: maps account names to cookie file paths.
-# Default account uses TIKTOK_COOKIES_PATH from .env.
-# Add more accounts by placing cookie files in the project root
-# and registering them here or via register_account().
-_accounts: dict[str, str] = {
-    "default": TIKTOK_COOKIES_PATH,
-}
+SCREENSHOTS_DIR = BASE_DIR / "screenshots"
+SCREENSHOTS_DIR.mkdir(exist_ok=True)
+
+# Account registry: populated from TIKTOK_ACCOUNTS env config.
+_accounts: dict[str, str] = dict(TIKTOK_ACCOUNTS)
 
 
 def register_account(name: str, cookies_path: str):
@@ -41,105 +42,205 @@ def _get_cookies_path(account_name: str | None) -> str:
     return path
 
 
+def _resolve_path(path_str: str) -> Path:
+    """Resolve a path to absolute, relative to BASE_DIR if needed."""
+    p = Path(path_str)
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    return p
+
+
+def _screenshot(page, label: str) -> str | None:
+    """Save a debug screenshot and return the path."""
+    try:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = SCREENSHOTS_DIR / f"{label}_{ts}.png"
+        page.screenshot(path=str(path), full_page=True)
+        logger.info(f"Screenshot saved: {path}")
+        return str(path)
+    except Exception as e:
+        logger.warning(f"Screenshot failed: {e}")
+        return None
+
+
+def _verify_upload(page, caption: str, timeout: int = 30) -> dict:
+    """
+    Verify an upload actually posted by checking the manage page.
+    Returns {"verified": bool, "reason": str, "screenshot": str|None}.
+    """
+    try:
+        # After posting, TikTok redirects to either /manage or /tiktokstudio/content.
+        # Wait for either URL pattern.
+        try:
+            page.wait_for_url("**/manage**", timeout=timeout * 1000)
+        except Exception:
+            try:
+                page.wait_for_url("**/tiktokstudio/content**", timeout=5000)
+            except Exception:
+                pass  # Fall through to content-based checks
+
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        time.sleep(3)  # Let the page populate
+
+        page_text = page.content()
+        current_url = page.url
+
+        # URL-based success: we landed on a content management page
+        on_manage_page = any(p in current_url for p in ["/manage", "/tiktokstudio/content"])
+
+        # Content-based success indicators
+        success_indicators = [
+            "Your video has been uploaded",
+            "Video published",
+            "Manage your posts",
+            "manage your account",
+            "Posts",
+        ]
+        found_manage = on_manage_page or any(ind.lower() in page_text.lower() for ind in success_indicators)
+
+        # Check for failure indicators
+        failure_indicators = [
+            "upload failed",
+            "try again",
+            "video removed",
+            "community guidelines",
+            "under review",
+        ]
+        found_failure = [
+            ind for ind in failure_indicators if ind.lower() in page_text.lower()
+        ]
+
+        if found_failure:
+            screenshot = _screenshot(page, "upload_rejected")
+            return {
+                "verified": False,
+                "reason": f"TikTok rejected: {', '.join(found_failure)}",
+                "screenshot": screenshot,
+            }
+
+        if found_manage:
+            # We're on the manage page — this is the best signal we have that
+            # the upload went through. The library's own check passed AND
+            # we confirmed we landed on /manage.
+            return {"verified": True, "reason": "Landed on manage page", "screenshot": None}
+
+        # Ambiguous — we're somewhere but can't confirm
+        screenshot = _screenshot(page, "upload_ambiguous")
+        return {
+            "verified": False,
+            "reason": f"Could not confirm upload. Page URL: {current_url}",
+            "screenshot": screenshot,
+        }
+
+    except Exception as e:
+        screenshot = _screenshot(page, "upload_verify_error")
+        return {
+            "verified": False,
+            "reason": f"Verification error: {e}",
+            "screenshot": screenshot,
+        }
+
+
 def upload_to_tiktok(
     video_path: str,
     caption: str,
     account_name: str | None = None,
 ) -> dict:
     """
-    Upload a single video to TikTok with caption.
-    Uses tiktok-uploader (Playwright-based browser automation).
-    Pass account_name to target a specific TikTok account.
+    Upload a single video to TikTok with caption and verify it posted.
+    Uses the class-based TikTokUploader for page access after upload.
     """
     logger.info(f"upload_to_tiktok called: video_path={video_path}, account={account_name}")
 
-    # Resolve to absolute path from BASE_DIR if relative
-    vpath = Path(video_path)
-    if not vpath.is_absolute():
-        vpath = BASE_DIR / vpath
-    video_path = str(vpath)
-
+    vpath = _resolve_path(video_path)
     if not vpath.exists():
-        logger.error(f"Video not found: {video_path}")
-        return {"success": False, "error": f"Video not found: {video_path}"}
+        logger.error(f"Video not found: {vpath}")
+        return {"success": False, "error": f"Video not found: {vpath}"}
 
     try:
         cookies_path = _get_cookies_path(account_name)
     except ValueError as e:
         logger.error(f"Account lookup failed: {e}")
         return {"success": False, "error": str(e)}
-    cookies_abs = Path(cookies_path)
-    if not cookies_abs.is_absolute():
-        cookies_abs = BASE_DIR / cookies_abs
-    cookies_path = str(cookies_abs)
 
+    cookies_abs = _resolve_path(cookies_path)
     if not cookies_abs.exists():
-        logger.error(f"Cookies not found: {cookies_path}")
+        logger.error(f"Cookies not found: {cookies_abs}")
         return {
             "success": False,
-            "error": f"TikTok cookies file not found at {cookies_path}. Export cookies from browser.",
+            "error": f"TikTok cookies file not found at {cookies_abs}. Export cookies from browser.",
         }
 
-    # Run upload in a separate process to avoid Playwright/asyncio conflicts
-    script = f"""
-import sys, signal
-signal.alarm(150)  # Hard kill after 150s
-try:
-    from tiktok_uploader.upload import upload_video
-    upload_video(
-        filename={video_path!r},
-        description={caption!r},
-        cookies={cookies_path!r},
-        headless=True,
-    )
-    print("UPLOAD_SUCCESS")
-except Exception as e:
-    print(f"UPLOAD_ERROR: {{e}}", file=sys.stderr)
-    sys.exit(1)
-"""
     try:
-        logger.info(f"Running upload subprocess for {video_path}")
-        proc = subprocess.Popen(
-            [sys.executable, "-c", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(BASE_DIR),
+        from tiktok_uploader.upload import TikTokUploader
+
+        uploader = TikTokUploader(cookies=str(cookies_abs), headless=True)
+
+        logger.info(f"Starting upload: {vpath}")
+        success = uploader.upload_video(
+            filename=str(vpath),
+            description=caption,
         )
-        try:
-            stdout, stderr = proc.communicate(timeout=160)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            logger.error(f"Upload timed out for {video_path}, killed subprocess")
-            return {"success": False, "error": "Upload timed out after 160 seconds"}
 
-        logger.info(f"Upload subprocess returned code={proc.returncode}")
-        logger.info(f"Upload stdout: {stdout[:500]}")
-        if stderr:
-            logger.info(f"Upload stderr: {stderr[:500]}")
+        if not success:
+            screenshot = _screenshot(uploader.page, "upload_failed")
+            uploader.close()
+            logger.error(f"upload_video returned False for {vpath}")
+            return {
+                "success": False,
+                "error": "TikTok uploader reported failure",
+                "screenshot": screenshot,
+            }
 
-        if proc.returncode == 0 and "UPLOAD_SUCCESS" in stdout:
-            logger.info(f"Upload successful: {video_path}")
+        # The library said success — now actually verify
+        logger.info(f"Library reported success, verifying upload for {vpath}")
+        verification = _verify_upload(uploader.page, caption)
+
+        uploader.close()
+
+        if verification["verified"]:
+            logger.info(f"Upload VERIFIED: {vpath}")
             return {
                 "success": True,
-                "video_path": video_path,
+                "verified": True,
+                "video_path": str(vpath),
                 "caption": caption,
                 "account": account_name or "default",
             }
+        else:
+            logger.warning(
+                f"Upload NOT verified for {vpath}: {verification['reason']}"
+            )
+            return {
+                "success": False,
+                "error": f"Upload unverified: {verification['reason']}",
+                "screenshot": verification.get("screenshot"),
+            }
 
-        error_msg = stderr.strip() or stdout.strip()
-        if "cookie" in error_msg.lower() or "login" in error_msg.lower():
-            logger.error(f"Cookie auth failed for {video_path}")
+    except ImportError:
+        logger.error("tiktok-uploader not installed")
+        return {"success": False, "error": "tiktok-uploader package not installed. Run: pip install tiktok-uploader"}
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Upload exception for {vpath}: {error_msg}")
+
+        # Try to screenshot before giving up
+        screenshot = None
+        try:
+            if "uploader" in dir() and hasattr(uploader, "page"):
+                screenshot = _screenshot(uploader.page, "upload_exception")
+                uploader.close()
+        except Exception:
+            pass
+
+        if "cookie" in error_msg.lower() or "login" in error_msg.lower() or "auth" in error_msg.lower():
             return {
                 "success": False,
                 "error": "Cookie authentication failed. Re-export cookies from browser.",
+                "screenshot": screenshot,
             }
-        logger.error(f"Upload failed for {video_path}: {error_msg[-300:]}")
-        return {"success": False, "error": f"Upload failed: {error_msg[-300:]}"}
-    except Exception as e:
-        logger.error(f"Upload exception for {video_path}: {e}")
-        return {"success": False, "error": f"Upload failed: {e}"}
+        return {"success": False, "error": f"Upload failed: {error_msg}", "screenshot": screenshot}
 
 
 def upload_batch_to_tiktok(
@@ -151,17 +252,19 @@ def upload_batch_to_tiktok(
     Upload multiple clips with delays to avoid rate limiting.
     Each clip dict should have 'filepath' and 'caption' keys.
     """
-    results = {"posted": 0, "failed": 0, "errors": [], "details": []}
+    results: dict = {"posted": 0, "failed": 0, "verified": 0, "errors": [], "details": []}
 
     for i, clip in enumerate(clips):
         result = upload_to_tiktok(
             clip["filepath"], clip["caption"], account_name=account_name
         )
-        if result["success"]:
+        if result.get("success"):
             results["posted"] += 1
+            if result.get("verified"):
+                results["verified"] += 1
         else:
             results["failed"] += 1
-            results["errors"].append(result["error"])
+            results["errors"].append(result.get("error", "Unknown error"))
 
         results["details"].append(result)
 
