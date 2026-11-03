@@ -55,6 +55,8 @@ GAME_KEYWORDS = [k.strip() for k in os.getenv(
     "GAME_KEYWORDS", "Grand Theft Auto VI,GTA VI,GTA 6,GTA6,GTAVI"
 ).split(",") if k.strip()]
 SEGMENT_SECONDS = int(os.getenv("SEGMENT_SECONDS", "900"))        # VODs are processed in 15 min chunks
+# Stream clip layout when no facecam box is set: "zoom" (default) or "fit"
+STREAM_LAYOUT = os.getenv("STREAM_LAYOUT", "zoom")
 LIVE_RECORD_SECONDS = int(os.getenv("LIVE_RECORD_SECONDS", "600")) # each live pass records 10 min
 CLIPS_PER_SEGMENT = int(os.getenv("CLIPS_PER_SEGMENT", "2"))
 SEGMENTS_PER_RUN = int(os.getenv("SEGMENTS_PER_RUN", "4"))         # VOD chunks per streamer per pass

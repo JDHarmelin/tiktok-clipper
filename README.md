@@ -30,7 +30,7 @@ python watcher.py --url <vod url> --streamer kaicenat --start 3600   # clip one 
 
 Clips land in `clips/`; nothing is posted unless you pass `--post`.
 
-Edit `streamers.json` to add or remove streamers. Set `facecam` to `[x, y, w, h]` (fractions of the frame) for a streamer's webcam to get the facecam-over-gameplay layout; leave it `null` for the full frame over a blurred background. Check each handle before the first run.
+Edit `streamers.json` to add or remove streamers. Set `facecam` to `[x, y, w, h]` (fractions of the frame) for a streamer's webcam to get the facecam-over-gameplay layout; leave it `null` for the zoom layout: a zoomed-in centre crop of the stream on a blurred copy of itself, with a platform badge and the streamer's name above it. Set `STREAM_LAYOUT=fit` in `.env` to show the whole frame instead. Check each handle before the first run.
 
 Every clip burns in the streamer's credit tag and puts it in the caption. Clip programs usually ban view bots and reposting other clippers' clips, and want the streamer tagged.
 

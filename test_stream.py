@@ -130,17 +130,23 @@ def _fake_stream(path: Path, seconds=12):
     ], check=True)
 
 
-@pytest.mark.parametrize("facecam", [None, [0.02, 0.04, 0.25, 0.25]])
-def test_render_stream_clip(tmp_path, facecam):
+@pytest.mark.parametrize("facecam,layout,expected", [
+    (None, None, "zoom"),
+    (None, "fit", "fit"),
+    ([0.02, 0.04, 0.25, 0.25], None, "facecam"),
+])
+def test_render_stream_clip(tmp_path, facecam, layout, expected):
     from clipper import extract_stream_clip
 
     src = tmp_path / "src.mp4"
     _fake_stream(src)
     words = [{"word": w, "start": 1 + i * 0.4, "end": 1.3 + i * 0.4}
              for i, w in enumerate("NO WAY HE JUST CRASHED THE COP CAR".split())]
-    res = extract_stream_clip(str(src), 0.5, 9.5, f"test_{'cam' if facecam else 'fit'}",
-                              words=words, facecam=facecam, credit="@kaicenat")
+    res = extract_stream_clip(str(src), 0.5, 9.5, f"test_{expected}",
+                              words=words, facecam=facecam, credit="@kaicenat",
+                              platform="twitch", layout=layout)
     assert res["success"], res
+    assert res["layout"] == expected and res["has_captions"]
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream=width,height", "-of", "csv=p=0", res["filepath"]],

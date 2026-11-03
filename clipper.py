@@ -2,7 +2,7 @@
 import random
 import subprocess
 from pathlib import Path
-from config import OUTPUT_WIDTH, OUTPUT_HEIGHT, CLIPS_DIR, SUBTITLES_DIR, GAMEPLAY_DIR, BASE_DIR
+from config import OUTPUT_WIDTH, OUTPUT_HEIGHT, CLIPS_DIR, SUBTITLES_DIR, GAMEPLAY_DIR, BASE_DIR, STREAM_LAYOUT
 
 
 def _get_random_gameplay() -> Path | None:
@@ -278,6 +278,15 @@ def _format_ass_time(seconds: float) -> str:
 # ============================================================
 
 FACECAM_H = 640  # top band height in the facecam layout; gameplay gets the rest
+# "zoom" layout: a sharp, zoomed-in centre crop of the stream on a blurred copy
+# of itself, with the streamer's name in the band above it
+ZOOM_TOP = 527
+ZOOM_H = 990
+PLATFORM_COLOURS = {  # ASS colours are &HAABBGGRR
+    "twitch": ("&H00FF4691", "&H00FFFFFF"),
+    "kick": ("&H0018FC53", "&H00000000"),
+    "youtube": ("&H000000FF", "&H00FFFFFF"),
+}
 
 
 def extract_stream_clip(
@@ -288,13 +297,18 @@ def extract_stream_clip(
     words: list | None = None,
     facecam: list[float] | None = None,
     credit: str = "",
+    platform: str = "",
+    layout: str | None = None,
 ) -> dict:
     """Cut a 1080x1920 clip from stream footage.
 
-    facecam set ([x, y, w, h] as fractions of the frame): webcam on top,
-    gameplay below. facecam None: the full frame centred over a blurred copy
-    of itself, so nothing is cropped out. Captions and the streamer credit are
-    burned in either way.
+    Layouts:
+    - "zoom" (default): zoomed centre crop of the stream in the middle, blurred
+      copy above and below, streamer name in the top band.
+    - "facecam": webcam on top, gameplay below. Used when facecam is set
+      ([x, y, w, h] as fractions of the frame).
+    - "fit": the whole frame, small, over a blurred copy. Nothing cropped.
+    Captions and the streamer credit are burned in on every layout.
     """
     if start < 0 or end <= start:
         return {"success": False, "error": f"Invalid timestamps: {start}-{end}"}
@@ -303,15 +317,18 @@ def extract_stream_clip(
 
     duration = end - start
     output_path = CLIPS_DIR / f"{out_name}.mp4"
-    layout = "facecam" if facecam else "fit"
+    if layout is None:
+        layout = "facecam" if facecam else STREAM_LAYOUT
+    if layout == "facecam" and not facecam:
+        layout = "zoom"
 
     clip_words = [
         {"word": w["word"], "start": w["start"] - start, "end": w["end"] - start}
         for w in (words or [])
         if w["start"] >= start - 0.1 and w["end"] <= end + 0.1
     ]
-    caption_margin = 600 if layout == "facecam" else 380
-    ass_path = _stream_ass(clip_words, out_name, credit, caption_margin)
+    caption_margin = {"facecam": 600, "fit": 380}.get(layout, OUTPUT_HEIGHT - ZOOM_TOP - ZOOM_H + 70)
+    ass_path = _stream_ass(clip_words, out_name, credit, caption_margin, layout, platform)
 
     filters = _stream_filter(layout, facecam)
     for use_subs in ([True, False] if ass_path else [False]):
@@ -359,15 +376,23 @@ def _stream_filter(layout: str, facecam: list[float] | None) -> str:
             f"[game_src]crop=ih*{W}/{game_h}:ih,scale={W}:{game_h},setsar=1[game];"
             "[cam][game]vstack=inputs=2[v]"
         )
+    bg = (f"[bg_src]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+          "boxblur=25:2,eq=brightness=-0.15[bg];")
+    if layout == "zoom":
+        return (
+            "[0:v]split=2[bg_src][fg_src];" + bg +
+            f"[fg_src]scale={W}:{ZOOM_H}:force_original_aspect_ratio=increase,crop={W}:{ZOOM_H},setsar=1[fg];"
+            f"[bg][fg]overlay=0:{ZOOM_TOP},setsar=1[v]"
+        )
     return (
-        "[0:v]split=2[bg_src][fg_src];"
-        f"[bg_src]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=25:2,eq=brightness=-0.08[bg];"
+        "[0:v]split=2[bg_src][fg_src];" + bg +
         f"[fg_src]scale={W}:-2,setsar=1[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
     )
 
 
-def _stream_ass(words: list, out_name: str, credit: str, caption_margin: int) -> Path | None:
+def _stream_ass(words: list, out_name: str, credit: str, caption_margin: int,
+                layout: str = "fit", platform: str = "") -> Path | None:
     if not words and not credit:
         return None
     ass_path = SUBTITLES_DIR / f"{out_name}.ass"
@@ -382,18 +407,30 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Arial Black,84,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,60,60,{caption_margin},1
 Style: Credit,Arial,46,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,3,2,0,8,40,40,70,1
+Style: Name,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,40,40,{{credit_y}},1
+Style: Badge,Arial Black,40,{{badge_fg}},&H000000FF,{{badge_bg}},{{badge_bg}},-1,0,0,0,100,100,2,0,3,10,0,8,40,40,{{badge_y}},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
-    if credit:
+    if credit and layout == "zoom":
+        # Platform badge above the streamer's name, both in the top band
+        name = credit.lstrip("@")
+        if platform in PLATFORM_COLOURS:
+            events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Badge,,0,0,0,,{platform.upper()}")
+        events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Name,,0,0,0,,{name}")
+    elif credit:
         events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Credit,,0,0,0,,{credit}")
     for phrase in _group_words_into_phrases(words, words_per_phrase=3):
         s = max(0.0, phrase[0]["start"])
         e = max(s + 0.2, phrase[-1]["end"])
         text = " ".join(w["word"].strip() for w in phrase).upper()
         events.append(f"Dialogue: 0,{_format_ass_time(s)},{_format_ass_time(e)},Caption,,0,0,0,,{text}")
+    badge_bg, badge_fg = PLATFORM_COLOURS.get(platform, ("&H80000000", "&H00FFFFFF"))
+    header = (header.replace("{credit_y}", str(ZOOM_TOP - 190))
+                    .replace("{badge_y}", str(ZOOM_TOP - 290))
+                    .replace("{badge_bg}", badge_bg).replace("{badge_fg}", badge_fg))
     content = header + "\n".join(events) + "\n"
     ass_path.write_text(content.encode("utf-8", errors="replace").decode("utf-8"), encoding="utf-8")
     return ass_path

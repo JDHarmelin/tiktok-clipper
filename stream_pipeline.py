@@ -66,7 +66,7 @@ def process_chunk(
             continue
         res = extract_stream_clip(
             path, m.start, m.end, f"{tag}_{i:02d}",
-            words=words, facecam=s.facecam, credit=s.credit,
+            words=words, facecam=s.facecam, credit=s.credit, platform=s.platform,
         )
         if not res.get("success"):
             notify(f"[{s.name}] clip failed: {res.get('error')}")
