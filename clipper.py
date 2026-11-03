@@ -2,7 +2,7 @@
 import random
 import subprocess
 from pathlib import Path
-from config import OUTPUT_WIDTH, OUTPUT_HEIGHT, CLIPS_DIR, SUBTITLES_DIR, GAMEPLAY_DIR, BASE_DIR, STREAM_LAYOUT
+from config import OUTPUT_WIDTH, OUTPUT_HEIGHT, CLIPS_DIR, SUBTITLES_DIR, GAMEPLAY_DIR, BASE_DIR, STREAM_LAYOUT, OUR_HANDLE
 
 
 def _get_random_gameplay() -> Path | None:
@@ -282,11 +282,6 @@ FACECAM_H = 640  # top band height in the facecam layout; gameplay gets the rest
 # of itself, with the streamer's name in the band above it
 ZOOM_TOP = 527
 ZOOM_H = 990
-PLATFORM_COLOURS = {  # ASS colours are &HAABBGGRR
-    "twitch": ("&H00FF4691", "&H00FFFFFF"),
-    "kick": ("&H0018FC53", "&H00000000"),
-    "youtube": ("&H000000FF", "&H00FFFFFF"),
-}
 
 
 def extract_stream_clip(
@@ -299,12 +294,15 @@ def extract_stream_clip(
     credit: str = "",
     platform: str = "",
     layout: str | None = None,
+    socials: list[str] | None = None,
+    our_handle: str | None = None,
 ) -> dict:
     """Cut a 1080x1920 clip from stream footage.
 
     Layouts:
     - "zoom" (default): zoomed centre crop of the stream in the middle, blurred
-      copy above and below, streamer name in the top band.
+      copy above and below, the streamer's socials (icons + handle) in the top
+      band and your own handle (OUR_HANDLE) in the bottom band if set.
     - "facecam": webcam on top, gameplay below. Used when facecam is set
       ([x, y, w, h] as fractions of the frame).
     - "fit": the whole frame, small, over a blurred copy. Nothing cropped.
@@ -331,6 +329,21 @@ def extract_stream_clip(
     ass_path = _stream_ass(clip_words, out_name, credit, caption_margin, layout, platform)
 
     filters = _stream_filter(layout, facecam)
+    extra_inputs = []
+    if layout == "zoom" and credit:
+        from overlay import socials_overlay
+
+        png = socials_overlay(
+            SUBTITLES_DIR / f"{out_name}_socials.png",
+            credit,
+            socials or [platform or "twitch", "youtube", "instagram", "tiktok", "x"],
+            band_top=0,
+            band_bottom=ZOOM_TOP,
+            our_handle=OUR_HANDLE if our_handle is None else our_handle,
+            bottom_band_top=ZOOM_TOP + ZOOM_H,
+        )
+        extra_inputs = ["-i", str(png)]
+        filters = filters.replace("setsar=1[v]", "setsar=1[base]") + ";[base][1:v]overlay=0:0[v]"
     for use_subs in ([True, False] if ass_path else [False]):
         chain = filters
         if use_subs:
@@ -341,7 +354,7 @@ def extract_stream_clip(
             label = "[v]"
         cmd = [
             "ffmpeg", "-y", "-loglevel", "error",
-            "-ss", str(start), "-i", input_video, "-t", str(duration),
+            "-ss", str(start), "-i", input_video, *extra_inputs, "-t", str(duration),
             "-filter_complex", chain, "-map", label, "-map", "0:a?",
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
@@ -407,30 +420,18 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Arial Black,84,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,60,60,{caption_margin},1
 Style: Credit,Arial,46,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,3,2,0,8,40,40,70,1
-Style: Name,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,40,40,{{credit_y}},1
-Style: Badge,Arial Black,40,{{badge_fg}},&H000000FF,{{badge_bg}},{{badge_bg}},-1,0,0,0,100,100,2,0,3,10,0,8,40,40,{{badge_y}},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
-    if credit and layout == "zoom":
-        # Platform badge above the streamer's name, both in the top band
-        name = credit.lstrip("@")
-        if platform in PLATFORM_COLOURS:
-            events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Badge,,0,0,0,,{platform.upper()}")
-        events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Name,,0,0,0,,{name}")
-    elif credit:
+    if credit and layout != "zoom":  # zoom draws the credit in the socials overlay
         events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Credit,,0,0,0,,{credit}")
     for phrase in _group_words_into_phrases(words, words_per_phrase=3):
         s = max(0.0, phrase[0]["start"])
         e = max(s + 0.2, phrase[-1]["end"])
         text = " ".join(w["word"].strip() for w in phrase).upper()
         events.append(f"Dialogue: 0,{_format_ass_time(s)},{_format_ass_time(e)},Caption,,0,0,0,,{text}")
-    badge_bg, badge_fg = PLATFORM_COLOURS.get(platform, ("&H80000000", "&H00FFFFFF"))
-    header = (header.replace("{credit_y}", str(ZOOM_TOP - 190))
-                    .replace("{badge_y}", str(ZOOM_TOP - 290))
-                    .replace("{badge_bg}", badge_bg).replace("{badge_fg}", badge_fg))
     content = header + "\n".join(events) + "\n"
     ass_path.write_text(content.encode("utf-8", errors="replace").decode("utf-8"), encoding="utf-8")
     return ass_path

@@ -161,3 +161,20 @@ def test_loudness_spike_on_real_audio(tmp_path):
     _fake_stream(src)
     spikes = find_spikes(loudness_series(str(src)), z=1.5, min_gap=3)
     assert spikes and 5 <= spikes[0]["t"] <= 8
+
+
+def test_socials_overlay_png(tmp_path):
+    from PIL import Image
+    from overlay import socials_overlay
+
+    out = socials_overlay(tmp_path / "o.png", "@kaicenat", ["kick", "youtube", "instagram", "tiktok", "x", "myspace"],
+                          band_top=0, band_bottom=527, our_handle="clips", bottom_band_top=1517)
+    img = Image.open(out)
+    assert img.size == (1080, 1920) and img.mode == "RGBA"
+    assert img.getchannel("A").crop((0, 0, 1080, 527)).getbbox()      # icons + name drawn up top
+    assert img.getchannel("A").crop((0, 1517, 1080, 1920)).getbbox()  # our handle drawn below
+    assert not img.getchannel("A").crop((0, 600, 1080, 1400)).getbbox()  # clip area left clear
+
+
+def test_streamers_have_socials():
+    assert all(s.socials and s.socials[0] == s.platform for s in load_streamers())

@@ -1,14 +1,14 @@
 {
-  "_comment": "Streamers the watcher clips. platform: twitch | kick | youtube. handle: the channel name in the URL (YouTube: the @handle without @). credit: the tag added to every caption and burned into the clip. facecam: optional box [x, y, w, h] as fractions of the frame, used for the facecam-over-gameplay layout; leave null to use the blurred full-frame layout. enabled: false skips the streamer. Check each handle once before running.",
+  "_comment": "Streamers the watcher clips. platform: twitch | kick | youtube. handle: the channel name in the URL (YouTube: the @handle without @). credit: the tag added to every caption and burned into the clip. facecam: optional box [x, y, w, h] as fractions of the frame, used for the facecam-over-gameplay layout; leave null to use the zoom layout. socials: the icons shown with the handle at the top of the clip (twitch, kick, youtube, instagram, tiktok, x), in order. enabled: false skips the streamer. Check each handle once before running.",
   "streamers": [
-    {"name": "Kai Cenat", "platform": "twitch", "handle": "kaicenat", "credit": "@kaicenat", "facecam": null, "enabled": true},
-    {"name": "Adin Ross", "platform": "kick", "handle": "adinross", "credit": "@adinross", "facecam": null, "enabled": true},
-    {"name": "IShowSpeed", "platform": "youtube", "handle": "IShowSpeed", "credit": "@ishowspeed", "facecam": null, "enabled": true},
-    {"name": "xQc", "platform": "kick", "handle": "xqc", "credit": "@xqc", "facecam": null, "enabled": true},
-    {"name": "Stable Ronaldo", "platform": "twitch", "handle": "stableronaldo", "credit": "@stableronaldo", "facecam": null, "enabled": true},
-    {"name": "Jynxzi", "platform": "twitch", "handle": "jynxzi", "credit": "@jynxzi", "facecam": null, "enabled": true},
-    {"name": "TimTheTatman", "platform": "youtube", "handle": "timthetatman", "credit": "@timthetatman", "facecam": null, "enabled": true},
-    {"name": "Moist Critikal", "platform": "youtube", "handle": "penguinz0", "credit": "@moistcr1tikal", "facecam": null, "enabled": true},
-    {"name": "Valkyrae", "platform": "youtube", "handle": "Valkyrae", "credit": "@valkyrae", "facecam": null, "enabled": true}
+    {"name": "Kai Cenat", "platform": "twitch", "handle": "kaicenat", "credit": "@kaicenat", "facecam": null, "enabled": true, "socials": ["twitch", "youtube", "instagram", "tiktok", "x"]},
+    {"name": "Adin Ross", "platform": "kick", "handle": "adinross", "credit": "@adinross", "facecam": null, "enabled": true, "socials": ["kick", "youtube", "instagram", "tiktok", "x"]},
+    {"name": "IShowSpeed", "platform": "youtube", "handle": "IShowSpeed", "credit": "@ishowspeed", "facecam": null, "enabled": true, "socials": ["youtube", "instagram", "tiktok", "x"]},
+    {"name": "xQc", "platform": "kick", "handle": "xqc", "credit": "@xqc", "facecam": null, "enabled": true, "socials": ["kick", "youtube", "instagram", "tiktok", "x"]},
+    {"name": "Stable Ronaldo", "platform": "twitch", "handle": "stableronaldo", "credit": "@stableronaldo", "facecam": null, "enabled": true, "socials": ["twitch", "youtube", "instagram", "tiktok", "x"]},
+    {"name": "Jynxzi", "platform": "twitch", "handle": "jynxzi", "credit": "@jynxzi", "facecam": null, "enabled": true, "socials": ["twitch", "youtube", "instagram", "tiktok", "x"]},
+    {"name": "TimTheTatman", "platform": "youtube", "handle": "timthetatman", "credit": "@timthetatman", "facecam": null, "enabled": true, "socials": ["youtube", "instagram", "tiktok", "x"]},
+    {"name": "Moist Critikal", "platform": "youtube", "handle": "penguinz0", "credit": "@moistcr1tikal", "facecam": null, "enabled": true, "socials": ["youtube", "instagram", "tiktok", "x"]},
+    {"name": "Valkyrae", "platform": "youtube", "handle": "Valkyrae", "credit": "@valkyrae", "facecam": null, "enabled": true, "socials": ["youtube", "instagram", "tiktok", "x"]}
   ]
 }

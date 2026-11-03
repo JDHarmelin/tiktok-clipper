@@ -30,6 +30,7 @@ class Streamer:
     credit: str
     facecam: list[float] | None = None
     enabled: bool = True
+    socials: list[str] = field(default_factory=list)
 
     @property
     def slug(self) -> str:
@@ -62,6 +63,7 @@ def load_streamers(path: Path = STREAMERS_FILE) -> list[Streamer]:
             credit=row.get("credit") or f"@{row['handle'].lower()}",
             facecam=row.get("facecam"),
             enabled=row.get("enabled", True),
+            socials=[x.lower() for x in row.get("socials", [])],
         )
         if s.platform not in PLATFORMS:
             raise ValueError(f"{s.name}: unknown platform '{s.platform}'")
