@@ -10,6 +10,7 @@ import anthropic
 from config import (
     ANTHROPIC_API_KEY,
     CLAUDE_MODEL,
+    MODEL_PRICES,
     MAX_CLIPS,
     MIN_CLIP_DURATION,
     MAX_CLIP_DURATION,
@@ -21,7 +22,8 @@ from tiktok_poster import upload_to_tiktok
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=120.0)
+# api_key=None lets the SDK fall back to its own credential lookup
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or None, timeout=300.0)
 
 # ---- TOOL DEFINITIONS ----
 TOOLS = [
@@ -420,9 +422,10 @@ def run_pipeline(
             except Exception as e:
                 logger.error(f"Failed to delete source video: {e}")
 
-    # Calculate API cost (Claude Sonnet 4: $3/MTok input, $15/MTok output)
-    input_cost = (total_input_tokens / 1_000_000) * 3.0
-    output_cost = (total_output_tokens / 1_000_000) * 15.0
+    # Calculate API cost from the configured model's price
+    in_price, out_price = MODEL_PRICES.get(CLAUDE_MODEL, (4.0, 20.0))
+    input_cost = (total_input_tokens / 1_000_000) * in_price
+    output_cost = (total_output_tokens / 1_000_000) * out_price
     total_cost = input_cost + output_cost
 
     return {

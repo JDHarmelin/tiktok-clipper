@@ -271,3 +271,129 @@ def _format_ass_time(seconds: float) -> str:
     m = int((seconds % 3600) // 60)
     s = seconds % 60
     return f"{h}:{m:02d}:{s:05.2f}"
+
+
+# ============================================================
+# Stream clips (watcher.py): facecam over gameplay, or blurred fit
+# ============================================================
+
+FACECAM_H = 640  # top band height in the facecam layout; gameplay gets the rest
+
+
+def extract_stream_clip(
+    input_video: str,
+    start: float,
+    end: float,
+    out_name: str,
+    words: list | None = None,
+    facecam: list[float] | None = None,
+    credit: str = "",
+) -> dict:
+    """Cut a 1080x1920 clip from stream footage.
+
+    facecam set ([x, y, w, h] as fractions of the frame): webcam on top,
+    gameplay below. facecam None: the full frame centred over a blurred copy
+    of itself, so nothing is cropped out. Captions and the streamer credit are
+    burned in either way.
+    """
+    if start < 0 or end <= start:
+        return {"success": False, "error": f"Invalid timestamps: {start}-{end}"}
+    if not Path(input_video).exists():
+        return {"success": False, "error": f"Input video not found: {input_video}"}
+
+    duration = end - start
+    output_path = CLIPS_DIR / f"{out_name}.mp4"
+    layout = "facecam" if facecam else "fit"
+
+    clip_words = [
+        {"word": w["word"], "start": w["start"] - start, "end": w["end"] - start}
+        for w in (words or [])
+        if w["start"] >= start - 0.1 and w["end"] <= end + 0.1
+    ]
+    caption_margin = 600 if layout == "facecam" else 380
+    ass_path = _stream_ass(clip_words, out_name, credit, caption_margin)
+
+    filters = _stream_filter(layout, facecam)
+    for use_subs in ([True, False] if ass_path else [False]):
+        chain = filters
+        if use_subs:
+            escaped = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+            chain = filters + f";[v]ass={escaped}[out]"
+            label = "[out]"
+        else:
+            label = "[v]"
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-ss", str(start), "-i", input_video, "-t", str(duration),
+            "-filter_complex", chain, "-map", label, "-map", "0:a?",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+            str(output_path),
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=str(BASE_DIR))
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "ffmpeg timed out"}
+        if proc.returncode == 0:
+            return {
+                "success": True,
+                "filepath": str(output_path),
+                "filename": output_path.name,
+                "duration": round(duration, 1),
+                "layout": layout,
+                "has_captions": use_subs,
+            }
+        last_err = proc.stderr[-500:]
+    return {"success": False, "error": last_err}
+
+
+def _stream_filter(layout: str, facecam: list[float] | None) -> str:
+    W, H = OUTPUT_WIDTH, OUTPUT_HEIGHT
+    if layout == "facecam":
+        x, y, w, h = facecam
+        game_h = H - FACECAM_H
+        return (
+            "[0:v]split=2[cam_src][game_src];"
+            f"[cam_src]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},"
+            f"scale={W}:{FACECAM_H}:force_original_aspect_ratio=increase,crop={W}:{FACECAM_H},setsar=1[cam];"
+            f"[game_src]crop=ih*{W}/{game_h}:ih,scale={W}:{game_h},setsar=1[game];"
+            "[cam][game]vstack=inputs=2[v]"
+        )
+    return (
+        "[0:v]split=2[bg_src][fg_src];"
+        f"[bg_src]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=25:2,eq=brightness=-0.08[bg];"
+        f"[fg_src]scale={W}:-2,setsar=1[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+    )
+
+
+def _stream_ass(words: list, out_name: str, credit: str, caption_margin: int) -> Path | None:
+    if not words and not credit:
+        return None
+    ass_path = SUBTITLES_DIR / f"{out_name}.ass"
+    header = f"""[Script Info]
+Title: Stream Clip
+ScriptType: v4.00+
+PlayResX: {OUTPUT_WIDTH}
+PlayResY: {OUTPUT_HEIGHT}
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Caption,Arial Black,84,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,60,60,{caption_margin},1
+Style: Credit,Arial,46,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,3,2,0,8,40,40,70,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    events = []
+    if credit:
+        events.append(f"Dialogue: 1,0:00:00.00,9:59:59.00,Credit,,0,0,0,,{credit}")
+    for phrase in _group_words_into_phrases(words, words_per_phrase=3):
+        s = max(0.0, phrase[0]["start"])
+        e = max(s + 0.2, phrase[-1]["end"])
+        text = " ".join(w["word"].strip() for w in phrase).upper()
+        events.append(f"Dialogue: 0,{_format_ass_time(s)},{_format_ass_time(e)},Caption,,0,0,0,,{text}")
+    content = header + "\n".join(events) + "\n"
+    ass_path.write_text(content.encode("utf-8", errors="replace").decode("utf-8"), encoding="utf-8")
+    return ass_path

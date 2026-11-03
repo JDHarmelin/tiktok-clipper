@@ -16,3 +16,5 @@ gameplay/
 screenshots/
 cookies*.txt
 .DS_Store
+clipper.db
+test_clipper.db

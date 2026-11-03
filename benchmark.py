@@ -76,7 +76,7 @@ def run_benchmark():
 
     # Step 2: Test each model
     results = {}
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=120.0)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or None, timeout=120.0)
 
     for model in MODELS:
         print(f"\n{'=' * 60}")
